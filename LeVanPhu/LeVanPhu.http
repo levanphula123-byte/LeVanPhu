@@ -1,0 +1,6 @@
+@LeVanPhu_HostAddress = http://localhost:5090
+
+GET {{LeVanPhu_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

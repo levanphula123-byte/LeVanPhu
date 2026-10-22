@@ -96,39 +96,136 @@ class _FaceCameraScreenState extends State<FaceCameraScreen> {
   }
 
   Future<void> scan() async {
-    if (processing || finished || camera == null) return;
+    if (processing ||
+        finished ||
+        disposed ||
+        camera == null ||
+        camera!.value.isInitialized) {
+      // Điều kiện camera được kiểm tra bên dưới.
+    }
+
+    if (processing ||
+        finished ||
+        disposed ||
+        camera == null ||
+        !camera!.value.isInitialized ||
+        camera!.value.isTakingPicture) {
+      return;
+    }
+
     processing = true;
     XFile? photo;
+
     try {
+      debugPrint('[FACE] Bắt đầu chụp ảnh');
+
       photo = await camera!.takePicture();
-      // Bake EXIF orientation before both ML Kit and cropping, so coordinates agree.
-      final decoded = img.decodeImage(await File(photo.path).readAsBytes());
-      if (decoded == null) throw Exception('Không đọc được ảnh.');
+
+      debugPrint('[FACE] Chụp ảnh thành công: ${photo.path}');
+
+      final bytes = await File(photo.path).readAsBytes();
+      final decoded = img.decodeImage(bytes);
+
+      if (decoded == null) {
+        throw Exception('Không đọc được ảnh từ camera.');
+      }
+
       final upright = img.bakeOrientation(decoded);
-      await File(photo.path).writeAsBytes(img.encodeJpg(upright));
+
+      await File(photo.path).writeAsBytes(
+        img.encodeJpg(upright),
+        flush: true,
+      );
+
+      debugPrint(
+        '[FACE] Kích thước ảnh: ${upright.width} x ${upright.height}',
+      );
+
       final faces = await detector.detect(photo.path);
-      if (!mounted || finished) return;
+
+      debugPrint('[FACE] Phát hiện ${faces.length} khuôn mặt');
+
+      if (!mounted || disposed || finished) return;
+
       if (faces.length != 1) {
-        setState(
-          () => message = faces.isEmpty
-              ? 'Chưa thấy mặt. Hãy nhìn thẳng camera.'
-              : 'Chỉ để một khuôn mặt trong khung.',
-        );
+        setState(() {
+          message = faces.isEmpty
+              ? 'Chưa phát hiện khuôn mặt. Hãy nhìn thẳng camera.'
+              : 'Phát hiện nhiều khuôn mặt. Chỉ để một người trong khung.';
+        });
         return;
       }
-      final embedding = model.generateEmbedding(
-        FaceCropService().cropFace(upright, faces.first),
+
+      debugPrint('[FACE] BoundingBox: ${faces.first.boundingBox}');
+
+      setState(() {
+        message = 'Đã nhận diện khuôn mặt. Đang xử lý...';
+      });
+
+      final croppedFace = FaceCropService().cropFace(
+        upright,
+        faces.first,
       );
-      if (deadline != null && !DateTime.now().isBefore(deadline!)) return;
-      await widget.onEmbedding(embedding);
-      if (mounted) {
-        finished = true;
-        timer?.cancel();
-        Navigator.pop(context, true);
+
+      debugPrint(
+        '[FACE] Kích thước crop: '
+            '${croppedFace.width} x ${croppedFace.height}',
+      );
+
+      final embedding = model.generateEmbedding(croppedFace);
+
+      debugPrint('[FACE] Embedding: ${embedding.length} chiều');
+
+      if (deadline != null &&
+          !DateTime.now().isBefore(deadline!)) {
+        return;
       }
-    } catch (e) {
-      if (mounted) {
-        setState(() => message = e.toString().replaceFirst('Exception: ', ''));
+
+      if (!mounted || disposed || finished) return;
+
+      // Dừng quét trước khi gửi API, tránh gửi lặp lại khi backend lỗi.
+      timer?.cancel();
+
+      setState(() {
+        message = 'Đang gửi dữ liệu khuôn mặt lên hệ thống...';
+      });
+
+      debugPrint('[FACE] Bắt đầu gửi API /api/face');
+
+      try {
+        await widget.onEmbedding(embedding);
+      } catch (e, stackTrace) {
+        debugPrint('[FACE] API thất bại: $e');
+        debugPrintStack(stackTrace: stackTrace);
+
+        if (!mounted || disposed) return;
+
+        setState(() {
+          finished = true;
+          message = 'Đăng ký/xác thực thất bại:\n$e';
+        });
+
+        return;
+      }
+
+      debugPrint('[FACE] API xử lý thành công');
+
+      if (!mounted || disposed) return;
+
+      setState(() {
+        finished = true;
+        message = 'Xử lý khuôn mặt thành công.';
+      });
+
+      Navigator.pop(context, true);
+    } catch (e, stackTrace) {
+      debugPrint('[FACE] Lỗi xử lý: $e');
+      debugPrintStack(stackTrace: stackTrace);
+
+      if (mounted && !disposed && !finished) {
+        setState(() {
+          message = e.toString().replaceFirst('Exception: ', '');
+        });
       }
     } finally {
       if (photo != null) {
@@ -136,6 +233,7 @@ class _FaceCameraScreenState extends State<FaceCameraScreen> {
           await File(photo.path).delete();
         } catch (_) {}
       }
+
       processing = false;
     }
   }

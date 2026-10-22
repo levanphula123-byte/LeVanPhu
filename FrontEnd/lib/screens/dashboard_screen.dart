@@ -81,20 +81,45 @@ class _DashboardScreenState extends State<DashboardScreen> {
   void manage(String title, String endpoint) =>
       open(ManagementScreen(title: title, endpoint: endpoint, role: role));
   Future<void> registerFace() async {
-    await Navigator.push<bool>(
+    final success = await Navigator.push<bool>(
       context,
       MaterialPageRoute(
         builder: (_) => FaceCameraScreen(
           onEmbedding: (embedding) async {
-            await ApiService.request(
-              'PUT',
-              '/api/face',
-              body: {'embedding': embedding},
+            debugPrint(
+              '[REGISTER FACE] Embedding length: ${embedding.length}',
             );
+
+            try {
+              debugPrint('[REGISTER FACE] Gửi PUT /api/face');
+
+              final result = await ApiService.request(
+                'PUT',
+                '/api/face',
+                body: {'embedding': embedding},
+              );
+
+              debugPrint('[REGISTER FACE] Thành công: $result');
+            } catch (e, stackTrace) {
+              debugPrint('[REGISTER FACE] Lỗi: $e');
+              debugPrintStack(stackTrace: stackTrace);
+              rethrow;
+            }
           },
         ),
       ),
     );
+
+    if (!mounted) return;
+
+    if (success == true) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Đăng ký khuôn mặt thành công!'),
+        ),
+      );
+    }
+
     await load();
   }
 
